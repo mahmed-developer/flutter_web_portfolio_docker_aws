@@ -23,7 +23,8 @@ jobs:
       - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 'stable' # Ensures the latest stable Flutter version is used
+          flutter-version: '3.32.8'
+          channel: 'stable'
 
       # Step 3: Install Flutter dependencies
       # Runs 'flutter pub get' to fetch dependencies defined in pubspec.yaml
