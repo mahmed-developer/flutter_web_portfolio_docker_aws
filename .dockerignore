@@ -1,0 +1,11 @@
+build/linux
+build/macos
+build/windows
+.ios
+.android
+.git
+.vscode
+.pub-cache
+.dart_tool/
+pubspec.lock
+*.log
