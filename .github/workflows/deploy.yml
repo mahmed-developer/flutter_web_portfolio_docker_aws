@@ -43,7 +43,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }} # IAM user's access key (stored in GitHub Secrets)
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }} # IAM user's secret key (stored in GitHub Secrets)
-          aws-region: ${{ secrets.AWS_REGION }} # AWS region, set to eu-north-1 (stored in GitHub Secrets)
+          aws-region: ${{ secrets.AWS_REGION }} # AWS region (stored in GitHub Secrets)
 
       # Step 6: Log in to Amazon ECR
       # Uses aws-actions/amazon-ecr-login to authenticate Docker with your ECR registry
@@ -55,10 +55,11 @@ jobs:
       # Builds the Docker image from the Dockerfile and pushes it to the ECR repository
       - name: Build and push Docker image
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }} # ECR registry URI (e.g., <your-account-id>.dkr.ecr.eu-north-1.amazonaws.com)
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }} # ECR repository name, set to flutter-web-demo (stored in GitHub Secrets)
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }} # ECR registry URI (e.g., <your-account-id>.dkr.ecr.<region>.amazonaws.com)
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }} # ECR repository name (e.g., flutter-web-demo)
           IMAGE_TAG: ${{ github.sha }} # Tags the image with the commit SHA for traceability
         run: |
+          set -e
           # Build the Docker image using the Dockerfile in the repo root
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           # Tag the image with both the commit SHA and 'latest' for flexibility
@@ -67,8 +68,13 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
-      # Step 8: Update ECS Task Definition
-      # Updates the task definition to reference the new Docker image
+      # Step 8: Install jq (JSON processor)
+      # jq is required to edit ECS task definition JSON dynamically
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      # Step 9: Update ECS Task Definition
+      # Updates the ECS task definition to reference the new Docker image
       - name: Update ECS Task Definition
         id: task-def # Assigns an ID to access the new task definition ARN
         env:
@@ -76,21 +82,44 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }} # Reuses the repository name
           IMAGE_TAG: ${{ github.sha }} # Uses the same commit SHA tag
         run: |
+          set -e
           # Retrieve the current task definition JSON
           TASK_DEF=$(aws ecs describe-task-definition --task-definition flutter-web-cluster-tasks --query 'taskDefinition' --output json)
-          # Update the image in the task definition to the new image URI
-          NEW_TASK_DEF=$(echo $TASK_DEF | jq --arg IMAGE "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" '.containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .registeredAt, .registeredBy)')
+
+          # Update the image in the task definition to the new image URI and remove unneeded fields (including compatibilities)
+          NEW_TASK_DEF=$(echo "$TASK_DEF" | jq --arg IMAGE "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" '
+            .containerDefinitions[0].image = $IMAGE
+            | del(
+                .taskDefinitionArn,
+                .revision,
+                .status,
+                .requiresAttributes,
+                .registeredAt,
+                .registeredBy,
+                .compatibilities
+              )
+          ')
+
           # Register the new task definition and get its ARN
-          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json "$NEW_TASK_DEF" --query 'taskDefinition.taskDefinitionArn' --output text)
+          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "$NEW_TASK_DEF" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
           # Output the new ARN for use in the next step
           echo "TASK_DEF_ARN=$NEW_TASK_DEF_ARN" >> $GITHUB_OUTPUT
 
-      # Step 9: Update ECS Service
+      # Step 10: Update ECS Service
       # Forces a new deployment of the ECS service with the updated task definition
       - name: Update ECS Service
         env:
           ECS_CLUSTER: flutter-portfolio-cluster # Name of your ECS cluster
           ECS_SERVICE: flutter-web-cluster-tasks-service # Name of your ECS service
         run: |
+          set -e
           # Update the ECS service to use the new task definition and trigger a redeployment
-          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --task-definition ${{ steps.task-def.outputs.TASK_DEF_ARN }} --force-new-deployment
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_SERVICE \
+            --task-definition ${{ steps.task-def.outputs.TASK_DEF_ARN }} \
+            --force-new-deployment
