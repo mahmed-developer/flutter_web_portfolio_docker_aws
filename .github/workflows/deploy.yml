@@ -77,7 +77,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }} # Uses the same commit SHA tag
         run: |
           # Retrieve the current task definition JSON
-          TASK_DEF=$(aws ecs describe-task-definition --task-definition flutter-web-demo-task --query 'taskDefinition' --output json)
+          TASK_DEF=$(aws ecs describe-task-definition --task-definition flutter-web-cluster-tasks --query 'taskDefinition' --output json)
           # Update the image in the task definition to the new image URI
           NEW_TASK_DEF=$(echo $TASK_DEF | jq --arg IMAGE "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" '.containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .registeredAt, .registeredBy)')
           # Register the new task definition and get its ARN
@@ -90,7 +90,7 @@ jobs:
       - name: Update ECS Service
         env:
           ECS_CLUSTER: flutter-portfolio-cluster # Name of your ECS cluster
-          ECS_SERVICE: flutter-web-service # Name of your ECS service
+          ECS_SERVICE: flutter-web-cluster-tasks-service # Name of your ECS service
         run: |
           # Update the ECS service to use the new task definition and trigger a redeployment
           aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --task-definition ${{ steps.task-def.outputs.TASK_DEF_ARN }} --force-new-deployment
